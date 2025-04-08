@@ -70,7 +70,6 @@ def get_market_symbols(exchange=None, base_asset=None, margin_asset='USDT'):
     ORDER BY symbol
     """
     result = get_snowflake_data(query)
-
     return result
 
 @st.cache_data(ttl=3600)
