@@ -46,27 +46,17 @@ def get_exchanges():
     query = "SELECT DISTINCT exchange FROM raw_funding ORDER BY exchange"
     return get_snowflake_data(query)
 
-@st.cache_data(ttl=3600)
-def get_instruments():
-    query = """
-        SELECT DISTINCT base_token
-        FROM perp_markets 
-        WHERE base_token IN ('SOL', 'ETH', 'BTC')
-        ORDER BY base_token
-    """
-    return get_snowflake_data(query)
-
 def get_funding_table_for_exchange(exchange):
     """Return the appropriate funding data table name for the given exchange"""
     return "DRIFT_FUNDING" if exchange == "drift" else "RAW_FUNDING"
 
 @st.cache_data(ttl=3600)
-def get_market_symbols(exchange=None, base_asset=None):
+def get_market_symbols(exchange=None, base_asset=None, margin_asset='USDT'):
     # Special case for drift
     if exchange == "drift":
         return pd.DataFrame({'SYMBOL': [f'{base_asset}-PERP']})
 
-    where_clauses = ["margin_asset = 'USDT'", "type = 'perpetual'"]
+    where_clauses = [f"margin_asset = '{margin_asset}'", "type = 'perpetual'"]
     if exchange:
         where_clauses.append(f"exchange = '{exchange}'")
     if base_asset:
@@ -74,22 +64,22 @@ def get_market_symbols(exchange=None, base_asset=None):
     where_clause = " AND ".join(where_clauses)
     
     query = f"""
-    SELECT DISTINCT symbol
+    SELECT DISTINCT symbol, margin_asset
     FROM perp_markets
     WHERE {where_clause}
     ORDER BY symbol
     """
     result = get_snowflake_data(query)
-    if result.empty and exchange and base_asset:
-        st.warning(f"No markets found for {base_asset} on {exchange}")
+
     return result
 
 @st.cache_data(ttl=3600)
-def get_market_symbols_as_list(exchange, base_asset):
-    result = get_market_symbols(exchange, base_asset)
+def get_market_symbols_formatted(exchange, base_asset, margin_asset='USDT'):
+    result = get_market_symbols(exchange, base_asset, margin_asset)
+    usdt_flag = True
     if result.empty:
-        return ""
-    return "', '".join(result['SYMBOL'].tolist())
+        usdt_flag = False
+    return "', '".join(result['SYMBOL'].tolist()), result['MARGIN_ASSET'].tolist(), usdt_flag
 
 def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     """Calculate average funding rates for different time periods with proper compounding and APY"""
@@ -168,8 +158,6 @@ st.sidebar.header("Filters")
 try:
     exchanges_df = get_exchanges()
     exchanges_df = pd.concat([exchanges_df, pd.DataFrame({'EXCHANGE': ['drift']})])
-    instruments_df = get_instruments()
-
     base_assets = ['BTC', 'ETH', 'SOL']
     
     # Convert to lists for dropdown
@@ -188,15 +176,26 @@ try:
     if st.sidebar.button("Fetch Data"):
         
         # Get market symbols
+        # TODO getting both as USDC if one USDT is not available. 
+        # There is an unnecesary query in the worst case
+        usdt_flag = True
         if exchange_a == "drift":
-            market_symbols_a = f"{selected_base_asset}-PERP"
+            market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDT"]
         else:
-            market_symbols_a = get_market_symbols_as_list(exchange_a, selected_base_asset)
-        
+            market_symbols_a, margin_assets_a, usdt_long_flag = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDT")
+            if not usdt_long_flag:
+                market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
+
         if exchange_b == "drift":
-            market_symbols_b = f"{selected_base_asset}-PERP"
+            market_symbols_b, margin_assets_b = f"{selected_base_asset}-PERP", ["USDT"]
         else:
-            market_symbols_b = get_market_symbols_as_list(exchange_b, selected_base_asset)
+            if usdt_long_flag:
+                market_symbols_b, margin_assets_b, usdt_short_flag = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDT")
+                if not usdt_short_flag:
+                    market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
+                    market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
+            else:
+                market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
 
         start_date_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
         end_date_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
@@ -225,27 +224,26 @@ try:
         ORDER BY timestamp_utc
         """
 
-        print(query_a)
-        print(query_b)
-
         with st.spinner("Fetching data..."):
             df_a = get_snowflake_data(query_a, exchange_a)
             df_b = get_snowflake_data(query_b, exchange_b)
         
         # Get the first symbol for each exchange for display purposes
         symbol_a = df_a['SYMBOL'].iloc[0] if not df_a.empty and len(df_a) > 0 else f"{selected_base_asset}-perp"
+        margin_asset_a = margin_assets_a[0]
         symbol_b = df_b['SYMBOL'].iloc[0] if not df_b.empty and len(df_b) > 0 else f"{selected_base_asset}-perp"
+        margin_asset_b = margin_assets_b[0]
         
         # Display data info
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader(f"{exchange_a} Funding Rates for {symbol_a}")
+            st.subheader(f"{exchange_a} Funding Rates for {symbol_a} ({margin_asset_a})")
             st.write(f"Records: {len(df_a)}")
             if not df_a.empty:
                 st.dataframe(df_a.head())
         
         with col2:
-            st.subheader(f"{exchange_b} Funding Rates for {symbol_b}")
+            st.subheader(f"{exchange_b} Funding Rates for {symbol_b} ({margin_asset_b})")
             st.write(f"Records: {len(df_b)}")
             if not df_b.empty:
                 st.dataframe(df_b.head())
