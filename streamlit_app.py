@@ -178,7 +178,7 @@ try:
         # Get market symbols
         # TODO getting both as USDC if one USDT is not available. 
         # There is an unnecesary query in the worst case
-        usdt_flag = True
+        usdt_long_flag = True
         if exchange_a == "drift":
             market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDT"]
         else:
