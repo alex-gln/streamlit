@@ -70,15 +70,21 @@ def get_market_symbols(exchange=None, base_asset=None, margin_asset='USDT'):
     ORDER BY symbol
     """
     result = get_snowflake_data(query)
+ 
     return result
 
 @st.cache_data(ttl=3600)
 def get_market_symbols_formatted(exchange, base_asset, margin_asset='USDT'):
     result = get_market_symbols(exchange, base_asset, margin_asset)
+    
     usdt_flag = True
     if result.empty:
         usdt_flag = False
-    return "', '".join(result['SYMBOL'].tolist()), result['MARGIN_ASSET'].tolist(), usdt_flag
+        return "", [], usdt_flag
+    
+    symbols_str = "', '".join(result['SYMBOL'].tolist())
+    margin_assets_list = result['MARGIN_ASSET'].tolist()
+    return symbols_str, margin_assets_list, usdt_flag
 
 def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     """Calculate average funding rates for different time periods with proper compounding and APY"""
@@ -173,189 +179,212 @@ try:
     
     # Fetch data button
     if st.sidebar.button("Fetch Data"):
-        
-        # Get market symbols
-        # TODO getting both as USDC if one USDT is not available. 
-        # There is an unnecesary query in the worst case
-        usdt_long_flag = True
-        if exchange_a == "drift":
-            market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDT"]
-        else:
-            market_symbols_a, margin_assets_a, usdt_long_flag = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDT")
-            if not usdt_long_flag:
-                market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
-
-        if exchange_b == "drift":
-            market_symbols_b, margin_assets_b = f"{selected_base_asset}-PERP", ["USDT"]
-        else:
-            if usdt_long_flag:
-                market_symbols_b, margin_assets_b, usdt_short_flag = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDT")
-                if not usdt_short_flag:
-                    market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
-                    market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
+        try:
+            # Get market symbols
+            # TODO getting both as USDC if one USDT is not available. 
+            # There is an unnecesary query in the worst case
+            usdt_long_flag = True
+            if exchange_a == "drift":
+                market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDT"]
             else:
-                market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
+                market_symbols_a, margin_assets_a, usdt_long_flag = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDT")
+                if not usdt_long_flag:
+                    market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
+                    # If still empty, use a default value
+                    if not market_symbols_a:
+                        market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDC"]
 
-        start_date_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
-        end_date_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
+            if exchange_b == "drift":
+                market_symbols_b, margin_assets_b = f"{selected_base_asset}-PERP", ["USDT"]
+            else:
+                if usdt_long_flag:
+                    market_symbols_b, margin_assets_b, usdt_short_flag = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDT")
+                    if not usdt_short_flag:
+                        # Only reset exchange_a if it's not drift
+                        if exchange_a != "drift":
+                            market_symbols_a, margin_assets_a, _ = get_market_symbols_formatted(exchange_a, selected_base_asset, "USDC")
+                            # If still empty, use a default value
+                            if not market_symbols_a:
+                                market_symbols_a, margin_assets_a = f"{selected_base_asset}-PERP", ["USDC"]
+                        market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
+                        # If still empty, use a default value
+                        if not market_symbols_b:
+                            market_symbols_b, margin_assets_b = f"{selected_base_asset}-PERP", ["USDC"]
+                else:
+                    market_symbols_b, margin_assets_b, _ = get_market_symbols_formatted(exchange_b, selected_base_asset, "USDC")
+                    # If still empty, use a default value
+                    if not market_symbols_b:
+                        market_symbols_b, margin_assets_b = f"{selected_base_asset}-PERP", ["USDC"]
+            
+            # Ensure margin_assets are not empty
+            if not margin_assets_a:
+                margin_assets_a = ["USDT"]
+            if not margin_assets_b:
+                margin_assets_b = ["USDT"]
 
-        # Get appropriate table names
-        table_a = get_funding_table_for_exchange(exchange_a)
-        table_b = get_funding_table_for_exchange(exchange_b)
+            start_date_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
+            end_date_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
 
-        # Query for Exchange A (long exchange)
-        query_a = f"""
-        SELECT timestamp_utc, funding_rate, symbol
-        FROM {table_a}
-        WHERE exchange = '{exchange_a}'
-        AND symbol IN ('{market_symbols_a}')
-        AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
-        ORDER BY timestamp_utc
-        """
-        
-        # Query for Exchange B
-        query_b = f"""
-        SELECT timestamp_utc, funding_rate, symbol
-        FROM {table_b}
-        WHERE exchange = '{exchange_b}'
-        AND symbol IN ('{market_symbols_b}')
-        AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
-        ORDER BY timestamp_utc
-        """
+            # Get appropriate table names
+            table_a = get_funding_table_for_exchange(exchange_a)
+            table_b = get_funding_table_for_exchange(exchange_b)
 
-        with st.spinner("Fetching data..."):
-            df_a = get_snowflake_data(query_a, exchange_a)
-            df_b = get_snowflake_data(query_b, exchange_b)
-        
-        # Get the first symbol for each exchange for display purposes
-        symbol_a = df_a['SYMBOL'].iloc[0] if not df_a.empty and len(df_a) > 0 else f"{selected_base_asset}-perp"
-        margin_asset_a = margin_assets_a[0]
-        symbol_b = df_b['SYMBOL'].iloc[0] if not df_b.empty and len(df_b) > 0 else f"{selected_base_asset}-perp"
-        margin_asset_b = margin_assets_b[0]
-        
-        # Display data info
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader(f"{exchange_a} Funding Rates for {symbol_a} ({margin_asset_a})")
-            st.write(f"Records: {len(df_a)}")
-            if not df_a.empty:
-                st.dataframe(df_a.head())
-        
-        with col2:
-            st.subheader(f"{exchange_b} Funding Rates for {symbol_b} ({margin_asset_b})")
-            st.write(f"Records: {len(df_b)}")
-            if not df_b.empty:
-                st.dataframe(df_b.head())
-        
-        # Plot comparisons
-        st.subheader(f"Funding Rate Comparison for {selected_base_asset}")
-        
-        if not df_a.empty and not df_b.empty:
-            # Create figure with secondary y-axis
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Query for Exchange A (long exchange)
+            query_a = f"""
+            SELECT timestamp_utc, funding_rate, symbol
+            FROM {table_a}
+            WHERE exchange = '{exchange_a}'
+            AND symbol IN ('{market_symbols_a}')
+            AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
+            ORDER BY timestamp_utc
+            """
             
-            # Add traces
-            fig.add_trace(
-                go.Scatter(
-                    x=df_a['TIMESTAMP_UTC'], 
-                    y=df_a['FUNDING_RATE'],
-                    name=f"{exchange_a} ({symbol_a})",
-                    line=dict(color="blue")
-                )
-            )
+            # Query for Exchange B
+            query_b = f"""
+            SELECT timestamp_utc, funding_rate, symbol
+            FROM {table_b}
+            WHERE exchange = '{exchange_b}'
+            AND symbol IN ('{market_symbols_b}')
+            AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
+            ORDER BY timestamp_utc
+            """
+
+            with st.spinner("Fetching data..."):
+                df_a = get_snowflake_data(query_a, exchange_a)
+                df_b = get_snowflake_data(query_b, exchange_b)
             
-            fig.add_trace(
-                go.Scatter(
-                    x=df_b['TIMESTAMP_UTC'], 
-                    y=df_b['FUNDING_RATE'],
-                    name=f"{exchange_b} ({symbol_b})",
-                    line=dict(color="red")
-                )
-            )
+            # Get the first symbol for each exchange for display purposes
+            symbol_a = df_a['SYMBOL'].iloc[0] if not df_a.empty and len(df_a) > 0 else f"{selected_base_asset}-perp"
+            margin_asset_a = margin_assets_a[0]
+            symbol_b = df_b['SYMBOL'].iloc[0] if not df_b.empty and len(df_b) > 0 else f"{selected_base_asset}-perp"
+            margin_asset_b = margin_assets_b[0]
             
-            # Set x-axis title
-            fig.update_xaxes(title_text="Date")
+            # Display data info
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader(f"{exchange_a} Funding Rates for {symbol_a} ({margin_asset_a})")
+                st.write(f"Records: {len(df_a)}")
+                if not df_a.empty:
+                    st.dataframe(df_a.head())
             
-            # Set y-axes titles
-            fig.update_yaxes(title_text="Funding Rate (%)")
+            with col2:
+                st.subheader(f"{exchange_b} Funding Rates for {symbol_b} ({margin_asset_b})")
+                st.write(f"Records: {len(df_b)}")
+                if not df_b.empty:
+                    st.dataframe(df_b.head())
             
-            fig.update_layout(
-                title=f"{selected_base_asset} Funding Rate: {exchange_a} vs {exchange_b}",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=600
-            )
+            # Plot comparisons
+            st.subheader(f"Funding Rate Comparison for {selected_base_asset}")
             
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Correlation analysis
-            if len(df_a) > 1 and len(df_b) > 1:
-                st.subheader("Statistical Analysis")
+            if not df_a.empty and not df_b.empty:
+                # Create figure with secondary y-axis
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
                 
-                # Merge dataframes
-                df_a_renamed = df_a.rename(columns={"FUNDING_RATE": f"{exchange_a}_rate"})
-                df_b_renamed = df_b.rename(columns={"FUNDING_RATE": f"{exchange_b}_rate"})
-                
-                merged_df = pd.merge(
-                    df_a_renamed, 
-                    df_b_renamed, 
-                    on="TIMESTAMP_UTC", 
-                    how="inner",
-                    suffixes=('_a', '_b')
-                )
-                
-                if not merged_df.empty:
-                    correlation = merged_df[f"{exchange_a}_rate"].corr(merged_df[f"{exchange_b}_rate"])
-                    st.write(f"Correlation between {exchange_a} and {exchange_b} funding rates for {selected_base_asset}: {correlation:.4f}")
-                    
-                    # Scatter plot
-                    fig_scatter = px.scatter(
-                        merged_df, 
-                        x=f"{exchange_a}_rate", 
-                        y=f"{exchange_b}_rate",
-                        title=f"{selected_base_asset} Funding Rate Correlation: {exchange_a} vs {exchange_b}",
-                        labels={
-                            f"{exchange_a}_rate": f"{exchange_a} Funding Rate (%) - {symbol_a}",
-                            f"{exchange_b}_rate": f"{exchange_b} Funding Rate (%) - {symbol_b}"
-                        },
-                        trendline="ols"
+                # Add traces
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_a['TIMESTAMP_UTC'], 
+                        y=df_a['FUNDING_RATE'],
+                        name=f"{exchange_a} ({symbol_a})",
+                        line=dict(color="blue")
                     )
-                    st.plotly_chart(fig_scatter, use_container_width=True)
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_b['TIMESTAMP_UTC'], 
+                        y=df_b['FUNDING_RATE'],
+                        name=f"{exchange_b} ({symbol_b})",
+                        line=dict(color="red")
+                    )
+                )
+                
+                # Set x-axis title
+                fig.update_xaxes(title_text="Date")
+                
+                # Set y-axes titles
+                fig.update_yaxes(title_text="Funding Rate (%)")
+                
+                fig.update_layout(
+                    title=f"{selected_base_asset} Funding Rate: {exchange_a} vs {exchange_b}",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    height=600
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Correlation analysis
+                if len(df_a) > 1 and len(df_b) > 1:
+                    st.subheader("Statistical Analysis")
                     
-                    # Download data
+                    # Merge dataframes
+                    df_a_renamed = df_a.rename(columns={"FUNDING_RATE": f"{exchange_a}_rate"})
+                    df_b_renamed = df_b.rename(columns={"FUNDING_RATE": f"{exchange_b}_rate"})
+                    
+                    merged_df = pd.merge(
+                        df_a_renamed, 
+                        df_b_renamed, 
+                        on="TIMESTAMP_UTC", 
+                        how="inner",
+                        suffixes=('_a', '_b')
+                    )
+                    
+                    if not merged_df.empty:
+                        correlation = merged_df[f"{exchange_a}_rate"].corr(merged_df[f"{exchange_b}_rate"])
+                        st.write(f"Correlation between {exchange_a} and {exchange_b} funding rates for {selected_base_asset}: {correlation:.4f}")
+                        
+                        # Scatter plot
+                        fig_scatter = px.scatter(
+                            merged_df, 
+                            x=f"{exchange_a}_rate", 
+                            y=f"{exchange_b}_rate",
+                            title=f"{selected_base_asset} Funding Rate Correlation: {exchange_a} vs {exchange_b}",
+                            labels={
+                                f"{exchange_a}_rate": f"{exchange_a} Funding Rate (%) - {symbol_a}",
+                                f"{exchange_b}_rate": f"{exchange_b} Funding Rate (%) - {symbol_b}"
+                            },
+                            trendline="ols"
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                        
+                        # Download data
+                        st.download_button(
+                            label="Download Comparison Data",
+                            data=merged_df.to_csv(index=False),
+                            file_name=f"{selected_base_asset}_{exchange_a}_vs_{exchange_b}_comparison.csv",
+                            mime="text/csv"
+                        )
+
+                # Add funding rate comparison table
+                st.subheader(f"Funding Rate Comparison Table for {selected_base_asset}")
+                
+                # Get funding averages
+                avg_rates_df = calculate_funding_averages(df_a, df_b, exchange_a, exchange_b)
+                
+                if avg_rates_df is not None:
+                    # Format percentages
+                    for col in avg_rates_df.columns[1:]:  # Skip the 'Time Period' column
+                        avg_rates_df[col] = avg_rates_df[col].map('{:.6%}'.format)
+                    
+                    # Display the table
+                    st.dataframe(avg_rates_df)
+                    
+                    # Add download button for the table
                     st.download_button(
-                        label="Download Comparison Data",
-                        data=merged_df.to_csv(index=False),
-                        file_name=f"{selected_base_asset}_{exchange_a}_vs_{exchange_b}_comparison.csv",
+                        label="Download Rate Comparison Table",
+                        data=avg_rates_df.to_csv(index=False),
+                        file_name=f"{selected_base_asset}_{exchange_a}_vs_{exchange_b}_rate_table.csv",
                         mime="text/csv"
                     )
-
-            # Add funding rate comparison table
-            st.subheader(f"Funding Rate Comparison Table for {selected_base_asset}")
-            
-            # Get funding averages
-            avg_rates_df = calculate_funding_averages(df_a, df_b, exchange_a, exchange_b)
-            
-            if avg_rates_df is not None:
-                # Format percentages
-                for col in avg_rates_df.columns[1:]:  # Skip the 'Time Period' column
-                    avg_rates_df[col] = avg_rates_df[col].map('{:.6%}'.format)
-                
-                # Display the table
-                st.dataframe(avg_rates_df)
-                
-                # Add download button for the table
-                st.download_button(
-                    label="Download Rate Comparison Table",
-                    data=avg_rates_df.to_csv(index=False),
-                    file_name=f"{selected_base_asset}_{exchange_a}_vs_{exchange_b}_rate_table.csv",
-                    mime="text/csv"
-                )
-        elif df_a.empty and df_b.empty:
-            st.warning(f"No data found for {selected_base_asset} on either exchange for the selected date range.")
-        elif df_a.empty:
-            st.warning(f"No data found for {selected_base_asset} on {exchange_a} for the selected date range.")
-        else:
-            st.warning(f"No data found for {selected_base_asset} on {exchange_b} for the selected date range.")
+            elif df_a.empty and df_b.empty:
+                st.warning(f"No data found for {selected_base_asset} on either exchange for the selected date range.")
+            elif df_a.empty:
+                st.warning(f"No data found for {selected_base_asset} on {exchange_a} for the selected date range.")
+            else:
+                st.warning(f"No data found for {selected_base_asset} on {exchange_b} for the selected date range.")
+        except Exception as e:
+            st.error(f"Error processing data: {e}")
+            st.info("Please try different exchanges or instruments.")
 
 except Exception as e:
     st.error(f"Error connecting to Snowflake: {e}")
