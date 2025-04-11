@@ -18,10 +18,8 @@ def get_snowflake_data(query, exchange=None):
     # Determine which database to use based on exchange
     if exchange == "drift":
         database = st.secrets["drift"]["database"]
-        schema = st.secrets["drift"]["schema"]
     else:
         database = st.secrets["gerrit"]["database"]
-        schema = st.secrets["gerrit"]["schema"]
     
     conn = connector.connect(
         user=st.secrets["gerrit"]["user"],
@@ -30,7 +28,7 @@ def get_snowflake_data(query, exchange=None):
         warehouse=st.secrets["gerrit"]["warehouse"],
         database=database,
         role=st.secrets["gerrit"]["role"],
-        schema=schema
+        schema=st.secrets["gerrit"]["schema"]
     )
     
     try:

@@ -1,3 +1,9 @@
 .streamlit/secrets.toml
 
 drift_data_update.py
+
+venv/
+
+drift_scripts/
+drift_swap/
+drift_funding/
