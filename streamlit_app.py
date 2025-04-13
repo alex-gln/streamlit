@@ -8,8 +8,8 @@ from plotly.subplots import make_subplots
 
 
 st.set_page_config(page_title="Funding Rate Comparison", layout="wide")
-st.title("Crypto Funding Rate Comparison")
-st.write("Compare funding rates between exchanges for BTC, ETH, and SOL instruments")
+st.title("Crypto Funding Rate Comparison Dashboard")
+st.write("Compare funding rates between exchanges for various instruments")
 
 DRIFT_BASE = ['BTC','ETH','SOL']
 
@@ -70,12 +70,11 @@ def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     
     # Define funding periods per day for different exchanges
     funding_periods = {
-        "drift": 24,      # 8-hour periods (3 per day)
-        "binance": 3,    # 8-hour periods (3 per day)
-        "bybit": 3,      # 8-hour periods (3 per day)
-        "hyperliquid": 24, # 8-hour periods (3 per day)
-        "dydx": 24,      # 1-hour periods (24 per day)
-        # Add other exchanges as needed
+        "drift": 24,
+        "binance": 3,
+        "bybit": 3,
+        "hyperliquid": 24,
+        "dydx": 24 
     }
     
     # Use default if exchange not found
@@ -150,14 +149,39 @@ try:
     default_start_date = default_end_date - timedelta(days=30)
     start_date = st.sidebar.date_input("Start Date", default_start_date)
     end_date = st.sidebar.date_input("End Date", default_end_date)
-    selected_margin_asset = st.sidebar.selectbox("Margin Asset", ['USDT', 'USDC'])
     selected_base_asset = st.sidebar.selectbox("Instrument", base_assets)
 
     if selected_base_asset != 'Select an asset':
-        exchanges_df = get_exchanges(selected_base_asset, selected_margin_asset)
+        exchanges_df = get_exchanges(selected_base_asset, 'USDT')  # Initial fetch with default margin asset
         exchanges_list = exchanges_df['EXCHANGE'].unique().tolist()
+        
+        # First select the long exchange
         exchange_a = st.sidebar.selectbox("Long Exchange", exchanges_list, index=0)
-        exchange_b = st.sidebar.selectbox("Short Exchange", exchanges_list, index=1 if len(exchanges_list) > 1 else 0)
+        
+        # Then select the margin asset for exchange A (long)
+        margin_asset_a = st.sidebar.selectbox("Long Exchange Margin Asset", ['USDT', 'USDC'], key="margin_a")
+        
+        # Update the exchanges list based on the selected base asset and margin asset for exchange A
+        exchanges_df_a = get_exchanges(selected_base_asset, margin_asset_a)
+        exchanges_list_a = exchanges_df_a['EXCHANGE'].unique().tolist()
+        
+        # If exchange_a is not in the updated list, reset it
+        if exchange_a not in exchanges_list_a and exchanges_list_a:
+            exchange_a = exchanges_list_a[0]
+        
+        # For exchange B, default margin asset to match exchange A
+        margin_asset_b = st.sidebar.selectbox("Short Exchange Margin Asset", 
+                                            ['USDT', 'USDC'], 
+                                            index=['USDT', 'USDC'].index(margin_asset_a),
+                                            key="margin_b")
+        
+        # Update exchanges list for exchange B based on its margin asset
+        exchanges_df_b = get_exchanges(selected_base_asset, margin_asset_b)
+        exchanges_list_b = exchanges_df_b['EXCHANGE'].unique().tolist()
+        
+        # Select exchange B, default to index 1 if available, otherwise 0
+        default_index_b = min(1, len(exchanges_list_b)-1) if exchanges_list_b else 0
+        exchange_b = st.sidebar.selectbox("Short Exchange", exchanges_list_b, index=default_index_b)
     
     # Fetch data button
     if st.sidebar.button("Fetch Data"):
@@ -173,14 +197,20 @@ try:
         table_a = get_funding_table_for_exchange(exchange_a)
         table_b = get_funding_table_for_exchange(exchange_b)
 
-        a_df = exchanges_df[(exchanges_df['EXCHANGE'] == exchange_a) & (exchanges_df['BASE_TOKEN'] == selected_base_asset) & (exchanges_df['MARGIN_ASSET'] == selected_margin_asset)]
-        b_df = exchanges_df[(exchanges_df['EXCHANGE'] == exchange_b) & (exchanges_df['BASE_TOKEN'] == selected_base_asset) & (exchanges_df['MARGIN_ASSET'] == selected_margin_asset)]
+        # Use the specific margin assets for each exchange
+        a_df = exchanges_df_a[(exchanges_df_a['EXCHANGE'] == exchange_a) & 
+                            (exchanges_df_a['BASE_TOKEN'] == selected_base_asset) & 
+                            (exchanges_df_a['MARGIN_ASSET'] == margin_asset_a)]
+        
+        b_df = exchanges_df_b[(exchanges_df_b['EXCHANGE'] == exchange_b) & 
+                            (exchanges_df_b['BASE_TOKEN'] == selected_base_asset) & 
+                            (exchanges_df_b['MARGIN_ASSET'] == margin_asset_b)]
 
         if len(a_df) == 0:
-            st.error(f"No data found for {selected_base_asset} with margin asset {selected_margin_asset} on {exchange_a} for the selected date range.")
+            st.error(f"No data found for {selected_base_asset} with margin asset {margin_asset_a} on {exchange_a} for the selected date range.")
             st.stop()
         if len(b_df) == 0:
-            st.error(f"No data found for {selected_base_asset} with margin asset {selected_margin_asset} on {exchange_b} for the selected date range.")
+            st.error(f"No data found for {selected_base_asset} with margin asset {margin_asset_b} on {exchange_b} for the selected date range.")
             st.stop()
 
         market_symbols_a = "', '".join(a_df['SYMBOL'].tolist())
@@ -217,13 +247,13 @@ try:
         # Display data info
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader(f"{exchange_a} Funding Rates for {symbol_a} ({selected_margin_asset})")
+            st.subheader(f"{exchange_a} Funding Rates for {symbol_a}")
             st.write(f"Records: {len(df_a)}")
             if not df_a.empty:
                 st.dataframe(df_a.head())
         
         with col2:
-            st.subheader(f"{exchange_b} Funding Rates for {symbol_b} ({selected_margin_asset})")
+            st.subheader(f"{exchange_b} Funding Rates for {symbol_b}")
             st.write(f"Records: {len(df_b)}")
             if not df_b.empty:
                 st.dataframe(df_b.head())
@@ -238,7 +268,7 @@ try:
             # Add traces
             fig.add_trace(
                 go.Scatter(
-                    x=df_a['TIMESTAMP_UTC'], 
+                    x=df_a['TIMESTAMP_UTC'],
                     y=df_a['FUNDING_RATE'],
                     name=f"{exchange_a} ({symbol_a})",
                     line=dict(color="blue")
