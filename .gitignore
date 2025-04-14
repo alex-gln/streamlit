@@ -8,3 +8,5 @@ drift_scripts/
 drift_swap/
 drift_funding/
 drift_funding_updates/
+funding_rate_fator.py
+funding_rate_oralce.py

@@ -303,11 +303,11 @@ try:
             if len(df_a) > 1 and len(df_b) > 1:
                 st.subheader("Statistical Analysis")
                 
-                # Merge dataframes
                 df_a_renamed = df_a.rename(columns={"FUNDING_RATE": f"{exchange_a}_rate"})
                 df_b_renamed = df_b.rename(columns={"FUNDING_RATE": f"{exchange_b}_rate"})
                 
-                merged_df = pd.merge(
+                # Create merged_df with inner join for visualization
+                merged_df_inner = pd.merge(
                     df_a_renamed, 
                     df_b_renamed, 
                     on="TIMESTAMP_UTC", 
@@ -315,13 +315,23 @@ try:
                     suffixes=('_a', '_b')
                 )
                 
-                if not merged_df.empty:
-                    correlation = merged_df[f"{exchange_a}_rate"].corr(merged_df[f"{exchange_b}_rate"])
+                # Create complete merged_df with outer join for download
+                merged_df_complete = pd.merge(
+                    df_a_renamed, 
+                    df_b_renamed, 
+                    on="TIMESTAMP_UTC", 
+                    how="outer",
+                    suffixes=('_a', '_b')
+                )
+                merged_df_complete.sort_values("TIMESTAMP_UTC", inplace=True)
+                
+                if not merged_df_inner.empty:
+                    correlation = merged_df_inner[f"{exchange_a}_rate"].corr(merged_df_inner[f"{exchange_b}_rate"])
                     st.write(f"Correlation between {exchange_a} and {exchange_b} funding rates for {selected_base_asset}: {correlation:.4f}")
                     
                     # Scatter plot
                     fig_scatter = px.scatter(
-                        merged_df, 
+                        merged_df_inner, 
                         x=f"{exchange_a}_rate", 
                         y=f"{exchange_b}_rate",
                         title=f"{selected_base_asset} Funding Rate Correlation: {exchange_a} vs {exchange_b}",
@@ -333,10 +343,10 @@ try:
                     )
                     st.plotly_chart(fig_scatter, use_container_width=True)
                     
-                    # Download data
+                    # Download data - using the complete merged dataset with outer join
                     st.download_button(
                         label="Download Comparison Data",
-                        data=merged_df.to_csv(index=False),
+                        data=merged_df_complete.to_csv(index=False),
                         file_name=f"{selected_base_asset}_{exchange_a}_vs_{exchange_b}_comparison.csv",
                         mime="text/csv"
                     )
