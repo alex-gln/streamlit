@@ -108,14 +108,14 @@ def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     # For a funding rate arbitrage, we want to know the spread between
     # paying funding on one exchange (short) and receiving on another (long)
     # Note: For shorts, we negate the rate since we're paying it
-    hourly_spread = hourly_a - (-hourly_b)
-    daily_spread = daily_a - (-daily_b)
-    weekly_spread = weekly_a - (-weekly_b)
-    monthly_spread = monthly_a - (-monthly_b)
-    yearly_spread = yearly_a - (-yearly_b)
+    hourly_spread = hourly_b - hourly_a
+    daily_spread = daily_b - daily_a
+    weekly_spread = weekly_b - weekly_a
+    monthly_spread = monthly_b - monthly_a
+    yearly_spread = yearly_b - yearly_a
     
     # Calculate the net APY for the spread (compounded)
-    apy_spread = apy_a - (-apy_b)
+    apy_spread = apy_b - apy_a
     
     # Create a DataFrame for the comparison table
     comparison_df = pd.DataFrame({
