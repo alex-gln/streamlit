@@ -84,6 +84,7 @@ def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     # Calculate mean funding rates
     mean_rate_a = df_a['FUNDING_RATE'].mean()
     mean_rate_b = df_b['FUNDING_RATE'].mean()
+    print(f"Mean rate A: {mean_rate_a}, Mean rate B: {mean_rate_b}")
     
     # Calculate APY directly using the compound interest formula
     apy_a = (1 + mean_rate_a) ** (periods_per_day_a * 365) - 1
@@ -121,7 +122,7 @@ def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
     comparison_df = pd.DataFrame({
         'Time Period': ['Hourly', 'Daily', 'Weekly', 'Monthly', 'Yearly', 'APY (Compounded)'],
         f'{exchange_a} (Long)': [hourly_a, daily_a, weekly_a, monthly_a, yearly_a, apy_a],
-        f'{exchange_b} (Short)': [-hourly_b, -daily_b, -weekly_b, -monthly_b, -yearly_b, -apy_b],
+        f'{exchange_b} (Short)': [hourly_b, daily_b, weekly_b, monthly_b, yearly_b, apy_b],
         'Spread (Net)': [hourly_spread, daily_spread, weekly_spread, monthly_spread, yearly_spread, apy_spread]
     })
     
