@@ -46,15 +46,17 @@ def get_funding_table_for_exchange(exchange):
     return "DRIFT_FUNDING" if exchange == "drift" else "RAW_FUNDING"
 
 @st.cache_data(ttl=3600)
-def get_exchanges(base_asset, margin_asset):
+def get_all_exchanges_with_margin(base_asset):
+    """Get all exchanges with their margin assets for a given base asset"""
     query = f"""
-    SELECT DISTINCT exchange,symbol,base_token,margin_asset FROM perp_markets 
-    WHERE margin_asset = '{margin_asset}' AND type = 'perpetual' 
-    AND base_token = '{base_asset}' ORDER BY exchange
+    SELECT DISTINCT exchange, margin_asset, symbol, base_token FROM perp_markets 
+    WHERE type = 'perpetual' AND base_token = '{base_asset}' 
+    ORDER BY exchange, margin_asset
     """
     df = get_snowflake_data(query)
     if base_asset in DRIFT_BASE:
-        df = pd.concat([df, pd.DataFrame({'EXCHANGE': ['drift'], 'SYMBOL': [f'{base_asset}-PERP'], 'BASE_TOKEN': [base_asset], 'MARGIN_ASSET': ['USDT']})])
+        df = pd.concat([df, pd.DataFrame({'EXCHANGE': ['drift'], 'MARGIN_ASSET': ['USDC'], 
+                                          'SYMBOL': [f'{base_asset}-PERP'], 'BASE_TOKEN': [base_asset]})])
     return df
 
 def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
@@ -77,14 +79,17 @@ def calculate_funding_averages(df_a, df_b, exchange_a, exchange_b):
         "dydx": 24 
     }
     
+    # Extract exchange name without margin asset
+    exchange_a_name = exchange_a.split(" (")[0].lower()
+    exchange_b_name = exchange_b.split(" (")[0].lower()
+    
     # Use default if exchange not found
-    periods_per_day_a = funding_periods.get(exchange_a.lower(), 3)
-    periods_per_day_b = funding_periods.get(exchange_b.lower(), 3)
+    periods_per_day_a = funding_periods.get(exchange_a_name, 3)
+    periods_per_day_b = funding_periods.get(exchange_b_name, 3)
     
     # Calculate mean funding rates
     mean_rate_a = df_a['FUNDING_RATE'].mean()
     mean_rate_b = df_b['FUNDING_RATE'].mean()
-    print(f"Mean rate A: {mean_rate_a}, Mean rate B: {mean_rate_b}")
     
     # Calculate APY directly using the compound interest formula
     apy_a = (1 + mean_rate_a) ** (periods_per_day_a * 365) - 1
@@ -153,36 +158,33 @@ try:
     selected_base_asset = st.sidebar.selectbox("Instrument", base_assets)
 
     if selected_base_asset != 'Select an asset':
-        exchanges_df = get_exchanges(selected_base_asset, 'USDT')  # Initial fetch with default margin asset
-        exchanges_list = exchanges_df['EXCHANGE'].unique().tolist()
+        # Get all exchanges with their margin assets
+        exchanges_df = get_all_exchanges_with_margin(selected_base_asset)
+        
+        # Create a formatted list of exchanges with margin assets in parentheses
+        exchanges_with_margin = []
+        exchange_to_margin = {}  # Dictionary to store exchange-to-margin mapping
+        
+        for _, row in exchanges_df.iterrows():
+            exchange_name = row['EXCHANGE']
+            margin_asset = row['MARGIN_ASSET']
+            display_name = f"{exchange_name} ({margin_asset})"
+            exchanges_with_margin.append(display_name)
+            exchange_to_margin[display_name] = {
+                'exchange': exchange_name,
+                'margin_asset': margin_asset,
+                'symbol': row['SYMBOL']
+            }
         
         # First select the long exchange
-        exchange_a = st.sidebar.selectbox("Long Exchange", exchanges_list, index=0)
+        exchange_a = st.sidebar.selectbox("Long Exchange", exchanges_with_margin, index=0)
         
-        # Then select the margin asset for exchange A (long)
-        margin_asset_a = st.sidebar.selectbox("Long Exchange Margin Asset", ['USDT', 'USDC'], key="margin_a")
+        # Filter out the selected long exchange for the short exchange selection
+        short_exchanges = [ex for ex in exchanges_with_margin if ex != exchange_a]
         
-        # Update the exchanges list based on the selected base asset and margin asset for exchange A
-        exchanges_df_a = get_exchanges(selected_base_asset, margin_asset_a)
-        exchanges_list_a = exchanges_df_a['EXCHANGE'].unique().tolist()
-        
-        # If exchange_a is not in the updated list, reset it
-        if exchange_a not in exchanges_list_a and exchanges_list_a:
-            exchange_a = exchanges_list_a[0]
-        
-        # For exchange B, default margin asset to match exchange A
-        margin_asset_b = st.sidebar.selectbox("Short Exchange Margin Asset", 
-                                            ['USDT', 'USDC'], 
-                                            index=['USDT', 'USDC'].index(margin_asset_a),
-                                            key="margin_b")
-        
-        # Update exchanges list for exchange B based on its margin asset
-        exchanges_df_b = get_exchanges(selected_base_asset, margin_asset_b)
-        exchanges_list_b = exchanges_df_b['EXCHANGE'].unique().tolist()
-        
-        # Select exchange B, default to index 1 if available, otherwise 0
-        default_index_b = min(1, len(exchanges_list_b)-1) if exchanges_list_b else 0
-        exchange_b = st.sidebar.selectbox("Short Exchange", exchanges_list_b, index=default_index_b)
+        # Select exchange B, default to first available
+        default_index_b = 0
+        exchange_b = st.sidebar.selectbox("Short Exchange", short_exchanges, index=default_index_b)
     
     # Fetch data button
     if st.sidebar.button("Fetch Data"):
@@ -195,34 +197,26 @@ try:
 
         start_date_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
         end_date_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
-        table_a = get_funding_table_for_exchange(exchange_a)
-        table_b = get_funding_table_for_exchange(exchange_b)
-
-        # Use the specific margin assets for each exchange
-        a_df = exchanges_df_a[(exchanges_df_a['EXCHANGE'] == exchange_a) & 
-                            (exchanges_df_a['BASE_TOKEN'] == selected_base_asset) & 
-                            (exchanges_df_a['MARGIN_ASSET'] == margin_asset_a)]
         
-        b_df = exchanges_df_b[(exchanges_df_b['EXCHANGE'] == exchange_b) & 
-                            (exchanges_df_b['BASE_TOKEN'] == selected_base_asset) & 
-                            (exchanges_df_b['MARGIN_ASSET'] == margin_asset_b)]
+        # Extract exchange names and margin assets
+        exchange_a_name = exchange_to_margin[exchange_a]['exchange']
+        exchange_b_name = exchange_to_margin[exchange_b]['exchange']
+        margin_asset_a = exchange_to_margin[exchange_a]['margin_asset']
+        margin_asset_b = exchange_to_margin[exchange_b]['margin_asset']
+        
+        table_a = get_funding_table_for_exchange(exchange_a_name)
+        table_b = get_funding_table_for_exchange(exchange_b_name)
 
-        if len(a_df) == 0:
-            st.error(f"No data found for {selected_base_asset} with margin asset {margin_asset_a} on {exchange_a} for the selected date range.")
-            st.stop()
-        if len(b_df) == 0:
-            st.error(f"No data found for {selected_base_asset} with margin asset {margin_asset_b} on {exchange_b} for the selected date range.")
-            st.stop()
-
-        market_symbols_a = "', '".join(a_df['SYMBOL'].tolist())
-        market_symbols_b = "', '".join(b_df['SYMBOL'].tolist())
+        # Get symbols for the exchanges
+        symbol_a = exchange_to_margin[exchange_a]['symbol']
+        symbol_b = exchange_to_margin[exchange_b]['symbol']
 
         # Query for Exchange A (long exchange)
         query_a = f"""
         SELECT timestamp_utc, funding_rate, symbol
         FROM {table_a}
-        WHERE exchange = '{exchange_a}'
-        AND symbol IN ('{market_symbols_a}')
+        WHERE exchange = '{exchange_a_name}'
+        AND symbol = '{symbol_a}'
         AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
         ORDER BY timestamp_utc
         """
@@ -231,30 +225,26 @@ try:
         query_b = f"""
         SELECT timestamp_utc, funding_rate, symbol
         FROM {table_b}
-        WHERE exchange = '{exchange_b}'
-        AND symbol IN ('{market_symbols_b}')
+        WHERE exchange = '{exchange_b_name}'
+        AND symbol = '{symbol_b}'
         AND timestamp_utc BETWEEN '{start_date_str}' AND '{end_date_str}'
         ORDER BY timestamp_utc
         """
 
         with st.spinner("Fetching data..."):
-            df_a = get_snowflake_data(query_a, exchange_a)
-            df_b = get_snowflake_data(query_b, exchange_b)
-        
-        # Get the first symbol for each exchange for display purposes
-        symbol_a = df_a['SYMBOL'].iloc[0] if not df_a.empty and len(df_a) > 0 else f"{selected_base_asset}-PERP"
-        symbol_b = df_b['SYMBOL'].iloc[0] if not df_b.empty and len(df_b) > 0 else f"{selected_base_asset}-PERP"
+            df_a = get_snowflake_data(query_a, exchange_a_name)
+            df_b = get_snowflake_data(query_b, exchange_b_name)
         
         # Display data info
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader(f"{exchange_a} Funding Rates for {symbol_a}")
+            st.subheader(f"{exchange_a} Funding Rates")
             st.write(f"Records: {len(df_a)}")
             if not df_a.empty:
                 st.dataframe(df_a.head())
         
         with col2:
-            st.subheader(f"{exchange_b} Funding Rates for {symbol_b}")
+            st.subheader(f"{exchange_b} Funding Rates")
             st.write(f"Records: {len(df_b)}")
             if not df_b.empty:
                 st.dataframe(df_b.head())
@@ -271,7 +261,7 @@ try:
                 go.Scatter(
                     x=df_a['TIMESTAMP_UTC'],
                     y=df_a['FUNDING_RATE'],
-                    name=f"{exchange_a} ({symbol_a})",
+                    name=f"{exchange_a}",
                     line=dict(color="blue")
                 )
             )
@@ -280,7 +270,7 @@ try:
                 go.Scatter(
                     x=df_b['TIMESTAMP_UTC'], 
                     y=df_b['FUNDING_RATE'],
-                    name=f"{exchange_b} ({symbol_b})",
+                    name=f"{exchange_b}",
                     line=dict(color="red")
                 )
             )
@@ -337,8 +327,8 @@ try:
                         y=f"{exchange_b}_rate",
                         title=f"{selected_base_asset} Funding Rate Correlation: {exchange_a} vs {exchange_b}",
                         labels={
-                            f"{exchange_a}_rate": f"{exchange_a} Funding Rate (%) - {symbol_a}",
-                            f"{exchange_b}_rate": f"{exchange_b} Funding Rate (%) - {symbol_b}"
+                            f"{exchange_a}_rate": f"{exchange_a} Funding Rate (%)",
+                            f"{exchange_b}_rate": f"{exchange_b} Funding Rate (%)"
                         },
                         trendline="ols"
                     )
